@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Polymarket 流动性奖励看板 MVP</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Snapshot-Based Liquidity Rewards</p>
+          <h1>先看哪儿更值，再决定把单挂去哪儿。</h1>
+          <p class="hero-text">
+            这是一个最小可测试版本：用当前市场快照和统一金额，快速比较奖励池效率，并在单池里做基础策略模拟。
+          </p>
+        </div>
+        <div class="hero-card">
+          <p class="hero-card-label">MVP 范围</p>
+          <ul class="hero-card-list">
+            <li>奖励池总览</li>
+            <li>统一金额模拟</li>
+            <li>单池单双边对比</li>
+            <li>基础风险提示</li>
+          </ul>
+        </div>
+      </header>
+
+      <section class="control-bar">
+        <div class="control-group amount-group">
+          <label for="global-amount">统一模拟金额</label>
+          <div class="amount-input">
+            <span>USDC</span>
+            <input id="global-amount" type="number" min="50" step="50" value="1000" />
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label for="sort-by">排序方式</label>
+          <select id="sort-by">
+            <option value="roi">按 ROI/h</option>
+            <option value="hourlyReward">按预估每小时奖励</option>
+            <option value="competition">按低竞争优先</option>
+            <option value="hourlyPool">按每小时总奖励</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label for="market-search">搜索市场</label>
+          <input id="market-search" type="search" placeholder="输入市场名称" />
+        </div>
+
+        <div class="control-group filter-group">
+          <span>快捷筛选</span>
+          <div class="filter-chips">
+            <button class="chip" data-filter="highReward" type="button">高奖励</button>
+            <button class="chip" data-filter="lowCompetition" type="button">低竞争</button>
+            <button class="chip" data-filter="dualFriendly" type="button">适合双边</button>
+          </div>
+        </div>
+
+        <div class="control-group data-group">
+          <span>实时数据</span>
+          <button id="refresh-data" class="refresh-btn" type="button">刷新数据</button>
+          <p id="data-status" class="data-status">正在连接 Polymarket...</p>
+        </div>
+      </section>
+
+      <section class="summary-strip" id="summary-strip"></section>
+
+      <main class="workspace">
+        <section class="overview-panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-label">页面一</p>
+              <h2>奖励池总览</h2>
+            </div>
+            <p class="panel-note">总览默认按“双边 + 中档报价距离 + 4h”进行快照式估算。</p>
+          </div>
+          <div class="market-list" id="market-list"></div>
+        </section>
+
+        <aside class="detail-panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-label">页面二</p>
+              <h2>单池基础模拟</h2>
+            </div>
+            <p class="panel-note">选中左侧池子后，可对比单边 / 双边和报价距离。</p>
+          </div>
+
+          <div class="empty-state" id="detail-empty">
+            <p>从左侧选择一个奖励池，查看更细的收益和风险结构。</p>
+          </div>
+
+          <div id="detail-view" hidden>
+            <section class="detail-card detail-card-head">
+              <div>
+                <p class="detail-state" id="detail-state"></p>
+                <h3 id="detail-title"></h3>
+                <p class="detail-subtitle" id="detail-subtitle"></p>
+              </div>
+              <div class="freshness" id="detail-freshness"></div>
+            </section>
+
+            <section class="detail-card simulator">
+              <div class="simulator-grid">
+                <label>
+                  <span>投入金额</span>
+                  <input id="detail-amount" type="number" min="50" step="50" />
+                </label>
+                <label>
+                  <span>挂单方式</span>
+                  <select id="detail-strategy">
+                    <option value="both">双边</option>
+                    <option value="single">单边</option>
+                  </select>
+                </label>
+                <label>
+                  <span>挂单方向</span>
+                  <select id="detail-direction">
+                    <option value="both">双边</option>
+                    <option value="buy">买</option>
+                    <option value="sell">卖</option>
+                  </select>
+                </label>
+                <label>
+                  <span>报价距离</span>
+                  <select id="detail-spread-tier"></select>
+                </label>
+                <label>
+                  <span>挂单时长</span>
+                  <select id="detail-duration">
+                    <option value="1">1h</option>
+                    <option value="4" selected>4h</option>
+                    <option value="24">24h</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+
+            <section class="metric-grid" id="detail-metrics"></section>
+
+            <section class="detail-card chart-card">
+              <div class="chart-head">
+                <h3>投入金额 vs 预估每小时奖励</h3>
+                <p>看同一池子里边际收益是否开始递减。</p>
+              </div>
+              <div id="amount-chart" class="bar-chart"></div>
+            </section>
+
+            <section class="detail-card chart-card">
+              <div class="chart-head">
+                <h3>报价距离 vs 预估每小时奖励</h3>
+                <p>越贴近 midpoint 奖励通常更高，但成交风险也更高。</p>
+              </div>
+              <div id="spread-chart" class="bar-chart"></div>
+            </section>
+
+            <section class="detail-card insight-card">
+              <div class="insight-block">
+                <p class="insight-label">策略判断</p>
+                <p class="insight-value" id="strategy-summary"></p>
+              </div>
+              <div class="insight-block">
+                <p class="insight-label">风险提示</p>
+                <p class="insight-value" id="risk-summary"></p>
+              </div>
+              <div class="insight-block">
+                <p class="insight-label">模型说明</p>
+                <p class="insight-value">
+                  当前版本为快照式预估，用于横向比较，不代表实际结算结果。
+                </p>
+              </div>
+            </section>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

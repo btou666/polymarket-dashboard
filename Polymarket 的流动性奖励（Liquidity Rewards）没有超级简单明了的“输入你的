@@ -1,0 +1,25 @@
+Polymarket 的流动性奖励（Liquidity Rewards）没有超级简单明了的“输入你的资金量就能直接算出每小时 U”的公式。 
+
+docs.polymarket.com
+
+它不是传统 DeFi 池子（像 Uniswap 那样按 LP 份额比例分奖励），而是通过在订单簿挂限价单（limit orders）做市赚取。奖励基于每分钟采样的动态“贡献分数”（Q score），分数受：订单离中点（midpoint）的距离（越近越高，用二次函数惩罚远单）
+订单大小
+双边流动性（YES/NO 都要挂才满分）
+与其他做市商竞争 等因素影响。
+
+每天午夜 UTC 发放 USDC（最低 $1 才到账），你可以直接去 https://polymarket.com/rewards 查看你当天实时预估收益和合格市场，然后 除以 24 就是大概每小时收益（最实用方法）。最接近的“简单估算公式”（实际操作中大家这么用）每小时收益 ≈（你的有效贡献占比 P × 该市场每日总奖励金额 R）/ 24
+（单位：USDC）P = 你的 Q 分数 / 全市场所有做市商总 Q 分数（0~1 之间）
+R = 该市场当天总奖励池（Polymarket 官方或赞助商设置的，每天固定，看 rewards 页面）
+实际 P 取决于你挂单质量（越贴近中点、越大、双边越平衡，P 越高）
+
+如果你想自己编程精确算（进阶）核心订单评分（每分钟采样一次）：
+S(v,s)=(v−sv)2×bS(v, s) = \left( \frac{v - s}{v} \right)^2 \times bS(v, s) = \left( \frac{v - s}{v} \right)^2 \times b
+
+（v = 市场最大允许价差，s = 你订单离调整后中点的距离，b 是常数）然后聚合双边分数，取 min（鼓励双边），单边有 1/3 惩罚，再归一化，累积 7 天 epoch 后按比例分。 
+
+docs.polymarket.com
+
+超级麻烦，需要实时抓全市场订单簿数据（用 API），一般只有 bot 做市商才算。普通人直接看 rewards 页面就够了。注意：如果你其实指的是Holding Rewards（持仓奖励，4% 年化），那才有真正简单的公式：
+每小时收益=你的持仓价值×0.04365×24≈价值×0.000004566 USDC\text{每小时收益} = \text{你的持仓价值} \times \frac{0.04}{365 \times 24} \approx \text{价值} \times 0.000004566 \text{ USDC}\text{每小时收益} = \text{你的持仓价值} \times \frac{0.04}{365 \times 24} \approx \text{价值} \times 0.000004566 \text{ USDC}
+
+每小时随机采样一次价值，第二天统一发。
