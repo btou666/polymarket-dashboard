@@ -5,6 +5,8 @@ const GAMMA_MARKETS_ENDPOINT = "https://gamma-api.polymarket.com/markets";
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 500;
 const REWARDS_PAGE_SIZE = 100;
+const GAMMA_PAGE_SIZE = 500;
+const GAMMA_MAX_SCAN = 5000;
 
 function extractNextDataJson(html) {
   const marker = '<script id="__NEXT_DATA__" type="application/json"';
@@ -53,6 +55,22 @@ function chunk(array, size) {
   return out;
 }
 
+function toNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function safeJsonParseArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function buildRewardsApiUrl(cursor, limit) {
   const url = new URL(REWARDS_API_URL);
   url.searchParams.set("interval", "current");
@@ -93,6 +111,7 @@ async function collectRewardsRows(seedPayload, limit) {
   let nextCursor = seedPayload?.next_cursor ?? null;
   let count = seedPayload?.count ?? null;
   let totalCount = seedPayload?.total_count ?? null;
+  let pageFetchError = null;
 
   const appendRows = (list) => {
     const sourceRows = Array.isArray(list) ? list : [];
@@ -117,7 +136,8 @@ async function collectRewardsRows(seedPayload, limit) {
       totalCount = page.total_count ?? totalCount;
       if (!page.next_cursor || page.next_cursor === nextCursor) break;
       nextCursor = page.next_cursor;
-    } catch {
+    } catch (error) {
+      pageFetchError = error instanceof Error ? error.message : String(error);
       break;
     }
   }
@@ -127,7 +147,78 @@ async function collectRewardsRows(seedPayload, limit) {
     nextCursor,
     count: count ?? rows.length,
     totalCount: totalCount ?? rows.length,
+    pageFetchError,
   };
+}
+
+function isPositiveRewardRow(row) {
+  const rewards = Array.isArray(row?.clobRewards) ? row.clobRewards : [];
+  return rewards.some((reward) => toNumber(reward?.rewardsDailyRate, 0) > 0);
+}
+
+function mapGammaToRewardsRow(row) {
+  const rewards = Array.isArray(row?.clobRewards) ? row.clobRewards : [];
+  const outcomes = safeJsonParseArray(row?.outcomes);
+  const outcomePrices = safeJsonParseArray(row?.outcomePrices);
+  const tokens = outcomes.map((outcome, index) => ({
+    outcome,
+    price: toNumber(outcomePrices[index], 0.5),
+  }));
+
+  return {
+    market_id: row?.id,
+    question: row?.question || "",
+    market_slug: row?.slug || "",
+    event_slug: row?.events?.[0]?.slug || row?.slug || "",
+    volume_24hr: toNumber(row?.volume24hr, 0),
+    market_competitiveness: toNumber(row?.competitive, 0.5),
+    spread: toNumber(row?.spread, 0.05),
+    rewards_min_size: toNumber(row?.rewardsMinSize, 5),
+    rewards_max_spread: toNumber(row?.rewardsMaxSpread, 3.5),
+    rewards_config: rewards.map((reward) => ({
+      rate_per_day: toNumber(reward?.rewardsDailyRate, 0),
+    })),
+    tokens,
+    end_date: row?.endDate || null,
+  };
+}
+
+async function fetchGammaRewardsFallbackRows(limit, seenMarketIds) {
+  const rows = [];
+  const seen = new Set(seenMarketIds || []);
+  let offset = 0;
+
+  while (rows.length < limit && offset < GAMMA_MAX_SCAN) {
+    const url = new URL(GAMMA_MARKETS_ENDPOINT);
+    url.searchParams.set("active", "true");
+    url.searchParams.set("closed", "false");
+    url.searchParams.set("limit", String(GAMMA_PAGE_SIZE));
+    url.searchParams.set("offset", String(offset));
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) break;
+
+    const payload = await response.json();
+    if (!Array.isArray(payload) || !payload.length) break;
+
+    for (const row of payload) {
+      if (!isPositiveRewardRow(row)) continue;
+      const marketId = String(row?.id ?? "");
+      if (!marketId || seen.has(marketId)) continue;
+
+      rows.push(mapGammaToRewardsRow(row));
+      seen.add(marketId);
+      if (rows.length >= limit) break;
+    }
+
+    if (payload.length < GAMMA_PAGE_SIZE) break;
+    offset += payload.length;
+  }
+
+  return rows;
 }
 
 async function fetchGammaDateMap(marketIds) {
@@ -187,9 +278,24 @@ module.exports = async function handler(req, res) {
 
     const limit = Math.min(Math.max(Number(req.query.limit) || DEFAULT_LIMIT, 1), MAX_LIMIT);
     const paged = await collectRewardsRows(payload, limit);
-    const marketIds = paged.rows.map((row) => String(row.market_id));
+    let rewardRows = paged.rows;
+    let source = "rewards_page_next_data_with_cursor_pagination";
+
+    if (rewardRows.length < limit) {
+      const missing = limit - rewardRows.length;
+      const gammaFallbackRows = await fetchGammaRewardsFallbackRows(
+        missing,
+        rewardRows.map((row) => String(row.market_id)),
+      );
+      if (gammaFallbackRows.length > 0) {
+        rewardRows = rewardRows.concat(gammaFallbackRows);
+        source = "rewards_page_with_gamma_rewards_fallback";
+      }
+    }
+
+    const marketIds = rewardRows.map((row) => String(row.market_id));
     const gammaDateMap = await fetchGammaDateMap(marketIds);
-    const mergedRows = paged.rows.map((row) => ({
+    const mergedRows = rewardRows.map((row) => ({
       ...row,
       end_date: gammaDateMap.get(String(row.market_id)) || null,
     }));
@@ -201,7 +307,8 @@ module.exports = async function handler(req, res) {
       limit: mergedRows.length,
       count: paged.count ?? mergedRows.length,
       total_count: paged.totalCount ?? mergedRows.length,
-      source: "rewards_page_next_data_with_cursor_pagination",
+      page_fetch_error: paged.pageFetchError ?? null,
+      source,
     });
   } catch (error) {
     res.status(502).json({
