@@ -65,7 +65,7 @@ select {
 .page-shell {
   width: min(1440px, calc(100vw - 32px));
   margin: 0 auto;
-  padding: 28px 0 40px;
+  padding: 16px 0 40px;
 }
 
 .hero {
@@ -174,7 +174,7 @@ select {
 }
 
 .control-bar {
-  margin-top: 20px;
+  margin-top: 8px;
   display: grid;
   grid-template-columns: 1.2fr repeat(5, minmax(0, 1fr));
   gap: 14px;
