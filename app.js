@@ -199,58 +199,50 @@ function getSpreadTierById(id) {
   return spreadTiers.find((tier) => tier.id === id) || spreadTiers[1];
 }
 
-function calcDailyReward(clobRewards) {
-  const rewards = Array.isArray(clobRewards) ? clobRewards : [];
-  const rate = rewards.reduce((sum, reward) => sum + toNumber(reward.rewardsDailyRate), 0);
+function calcDailyRewardFromConfig(rewardsConfig) {
+  const rewards = Array.isArray(rewardsConfig) ? rewardsConfig : [];
+  const rate = rewards.reduce((sum, reward) => sum + toNumber(reward.rate_per_day), 0);
   if (rate > 0) return rate;
-  return rewards.reduce((sum, reward) => sum + toNumber(reward.rewardsAmount), 0);
+  return rewards.reduce((sum, reward) => sum + toNumber(reward.total_rewards), 0);
 }
 
-function inferCategory(market) {
-  if (typeof market.groupItemTitle === "string" && market.groupItemTitle.trim()) {
-    return market.groupItemTitle.trim();
-  }
-  const slug = typeof market.slug === "string" ? market.slug : "";
+function inferCategoryFromRewardsRow(row) {
+  const slug = typeof row.event_slug === "string" ? row.event_slug : "";
   if (slug) {
     return slug.split("-")[0].toUpperCase();
   }
-  return "General";
+  return "Rewards";
 }
 
-function mapGammaMarket(raw) {
-  const dailyReward = calcDailyReward(raw.clobRewards);
+function mapRewardsMarket(row) {
+  const dailyReward = calcDailyRewardFromConfig(row.rewards_config);
   if (dailyReward <= 0) return null;
 
-  const bestBid = toNumber(raw.bestBid, NaN);
-  const bestAsk = toNumber(raw.bestAsk, NaN);
-  const outcomePrices = safeJsonParse(raw.outcomePrices, []);
-  const fallbackMid = toNumber(outcomePrices[0], 0.5);
-  const midpoint =
-    Number.isFinite(bestBid) && Number.isFinite(bestAsk) && bestBid > 0 && bestAsk > 0
-      ? (bestBid + bestAsk) / 2
-      : fallbackMid;
+  const tokens = Array.isArray(row.tokens) ? row.tokens : [];
+  const yesToken = tokens.find((token) => String(token.outcome || "").toLowerCase() === "yes");
+  const fallbackToken = tokens[0];
+  const midpoint = clamp(toNumber((yesToken || fallbackToken || {}).price, 0.5), 0.01, 0.99);
 
-  const liquidity = toNumber(raw.liquidityNum || raw.liquidityClob || raw.liquidity, 0);
-  const competitive = clamp(toNumber(raw.competitive, 0.5) * 100, 5, 99);
-  const depthDensity = clamp((Math.log10(liquidity + 10) - 1.5) * 40, 8, 96);
-  const marketScore = Math.max(liquidity * 0.18, 1200);
-  const hasBbo = Number.isFinite(bestBid) && Number.isFinite(bestAsk);
+  const volume24h = toNumber(row.volume_24hr, 0);
+  const competitiveness = clamp(toNumber(row.market_competitiveness, 0.5) * 100, 5, 99);
+  const depthDensity = clamp((Math.log10(volume24h + 10) - 0.7) * 40, 8, 96);
+  const marketScore = Math.max(volume24h * 28, 1200);
 
   return {
-    id: String(raw.id),
-    name: raw.question || raw.slug || `Market ${raw.id}`,
-    category: inferCategory(raw),
-    state: raw.closed ? "已结束" : raw.acceptingOrders ? "进行中" : "暂停接单",
+    id: String(row.market_id),
+    name: row.question || row.market_slug || `Market ${row.market_id}`,
+    category: inferCategoryFromRewardsRow(row),
+    state: "进行中",
     dailyReward,
-    maxSpread: toNumber(raw.rewardsMaxSpread || toNumber(raw.spread) * 100, 3.5),
-    minSize: Math.max(toNumber(raw.rewardsMinSize || raw.orderMinSize, 5), 5),
-    midpoint: clamp(midpoint, 0.01, 0.99),
-    bookDepth: liquidity,
+    maxSpread: toNumber(row.rewards_max_spread, 3.5),
+    minSize: Math.max(toNumber(row.rewards_min_size, 5), 5),
+    midpoint,
+    bookDepth: volume24h,
     marketScore,
-    concentration: competitive,
+    concentration: competitiveness,
     depthDensity,
-    twoSidedShare: hasBbo ? 64 : 44,
-    lastUpdatedMinutes: minutesSince(raw.updatedAt),
+    twoSidedShare: tokens.length >= 2 ? 64 : 44,
+    lastUpdatedMinutes: 1,
   };
 }
 
@@ -270,10 +262,10 @@ async function fetchWithTimeout(url, timeoutMs = 9000) {
 }
 
 async function fetchLiveMarketPayload() {
-  const query = "active=true&closed=false&limit=300";
+  const query = "interval=current&market_type=market&sort=DESC&tag=&category=all&cursor=MA==&limit=100&is_terminal=true";
   const endpoints = [
     { url: `/api/live-markets?${query}`, label: "实时 (Vercel代理)" },
-    { url: `https://gamma-api.polymarket.com/markets?${query}`, label: "实时 (直连)" },
+    { url: `https://polymarket.com/api/rewards?${query}`, label: "实时 (直连)" },
   ];
 
   let lastError = null;
@@ -284,10 +276,11 @@ async function fetchLiveMarketPayload() {
         throw new Error(`HTTP ${response.status}`);
       }
       const payload = await response.json();
-      if (!Array.isArray(payload)) {
+      const rows = Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : null;
+      if (!rows) {
         throw new Error("返回数据不是数组");
       }
-      return { payload, label: endpoint.label };
+      return { payload: rows, label: endpoint.label };
     } catch (error) {
       lastError = error;
     }
@@ -648,7 +641,7 @@ async function loadLiveMarkets() {
   try {
     const { payload, label } = await fetchLiveMarketPayload();
     const mapped = payload
-      .map(mapGammaMarket)
+      .map(mapRewardsMarket)
       .filter(Boolean)
       .sort((a, b) => b.dailyReward - a.dailyReward || b.bookDepth - a.bookDepth)
       .slice(0, 80);

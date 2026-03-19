@@ -1,18 +1,24 @@
-const GAMMA_ENDPOINT = "https://gamma-api.polymarket.com/markets";
+const REWARDS_ENDPOINT = "https://polymarket.com/api/rewards";
 
 module.exports = async function handler(req, res) {
-  const limit = Math.min(Math.max(Number(req.query.limit) || 300, 1), 500);
-  const active = req.query.active ?? "true";
-  const closed = req.query.closed ?? "false";
-  const offset = Math.max(Number(req.query.offset) || 0, 0);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+  const cursor = req.query.cursor ?? "MA==";
+  const interval = req.query.interval ?? "current";
+  const marketType = req.query.market_type ?? "market";
+  const sort = req.query.sort ?? "DESC";
+  const tag = req.query.tag ?? "";
+  const category = req.query.category ?? "all";
+  const isTerminal = req.query.is_terminal ?? "true";
 
-  const upstreamUrl = new URL(GAMMA_ENDPOINT);
-  upstreamUrl.searchParams.set("active", String(active));
-  upstreamUrl.searchParams.set("closed", String(closed));
+  const upstreamUrl = new URL(REWARDS_ENDPOINT);
+  upstreamUrl.searchParams.set("interval", String(interval));
+  upstreamUrl.searchParams.set("market_type", String(marketType));
+  upstreamUrl.searchParams.set("sort", String(sort));
+  upstreamUrl.searchParams.set("tag", String(tag));
+  upstreamUrl.searchParams.set("category", String(category));
+  upstreamUrl.searchParams.set("cursor", String(cursor));
   upstreamUrl.searchParams.set("limit", String(limit));
-  if (offset > 0) {
-    upstreamUrl.searchParams.set("offset", String(offset));
-  }
+  upstreamUrl.searchParams.set("is_terminal", String(isTerminal));
 
   try {
     const upstreamResponse = await fetch(upstreamUrl.toString(), {
@@ -34,7 +40,7 @@ module.exports = async function handler(req, res) {
     res.status(200).json(payload);
   } catch (error) {
     res.status(502).json({
-      error: "Failed to fetch Polymarket gamma API",
+      error: "Failed to fetch Polymarket rewards API",
       detail: error instanceof Error ? error.message : String(error),
     });
   }
