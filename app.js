@@ -88,7 +88,7 @@ const fallbackMarkets = [
 ];
 
 const state = {
-  amount: 1000,
+  amount: 100,
   sortBy: "roi",
   search: "",
   settlementRange: "all",
@@ -101,7 +101,7 @@ const state = {
   lastSyncAt: null,
   loadError: "",
   detail: {
-    amount: 1000,
+    amount: 100,
     strategy: "single",
     direction: "buy",
     spreadTier: "balanced",
@@ -287,8 +287,8 @@ function mapRewardsMarket(row) {
   const depthDensity = clamp((Math.log10(volume24h + 10) - 0.7) * 40, 8, 96);
   const minSize = Math.max(toNumber(row.rewards_min_size, 5), 5);
   const spreadNow = toNumber(row.spread, 0.05);
-  // Calibrated denominator: rewards pool competition should not scale linearly with 24h volume.
-  const marketScore = Math.max(minSize * 2.4 + competitiveness * 1.8 + spreadNow * 120, 90);
+  // Empirical denominator tuned for Rewards pools: keep single-side near-book estimates closer to observed fills.
+  const marketScore = Math.max(minSize * 1.8 + competitiveness * 1.35 + spreadNow * 72, 70);
   const endDate = row.end_date || null;
   const hoursToSettlement = hoursUntil(endDate);
 
@@ -366,11 +366,19 @@ function computeSimulation(market, config) {
   const hourlyPool = market.dailyReward / 24;
   const sideAllocation = config.strategy === "both" ? amount / 2 : amount;
   const minSizePenalty = sideAllocation >= market.minSize ? 1 : 0.25;
-  const spreadScore = Math.pow(1 - spreadTier.ratio, 2);
-  const strategyFactor = config.strategy === "both" ? 1.22 : 0.76;
+  const spreadScore = Math.pow(Math.max(1 - spreadTier.ratio * 0.78, 0.08), 1.25);
+  const strategyFactor = config.strategy === "both" ? 1.14 : 0.94;
   const directionFactor = config.strategy === "both" ? 1 : config.direction === "buy" ? 0.98 : 0.94;
   const durationFactor = config.duration >= 24 ? 1.08 : config.duration >= 4 ? 1 : 0.9;
   const stateFactor = market.state === "即将结算" ? 0.88 : 1;
+  const empiricalPositionFactor =
+    config.strategy === "both"
+      ? 1.06
+      : spreadTier.id === "tight"
+        ? 1.95
+        : spreadTier.id === "balanced"
+          ? 1.45
+          : 1.08;
 
   const userScore =
     Math.pow(Math.max(amount, 0), 0.62) *
@@ -379,12 +387,13 @@ function computeSimulation(market, config) {
     directionFactor *
     durationFactor *
     minSizePenalty *
-    stateFactor;
+    stateFactor *
+    empiricalPositionFactor;
 
   const estimatedShare = userScore / (market.marketScore + userScore);
   const hourlyReward = hourlyPool * estimatedShare;
   const dailyReward = hourlyReward * 24;
-  const rewardPer1000 = amount > 0 ? (hourlyReward / amount) * 1000 : 0;
+  const rewardPer100 = amount > 0 ? (hourlyReward / amount) * 100 : 0;
   const roi = amount > 0 ? (hourlyReward / amount) * 100 : 0;
   const competitionScore = computeCompetitionScore(market);
 
@@ -395,7 +404,7 @@ function computeSimulation(market, config) {
     estimatedShare,
     hourlyReward,
     dailyReward,
-    rewardPer1000,
+    rewardPer100,
     roi,
     competitionScore,
     competitionLevel: competitionLabel(competitionScore),
@@ -551,8 +560,8 @@ function renderMarketList(rows) {
               <strong>${formatCurrency(simulation.hourlyPool)}</strong>
             </div>
             <div class="metric-pair">
-              <span>每 1000 USDC</span>
-              <strong>${formatCurrency(simulation.rewardPer1000)}</strong>
+              <span>每 100 USDC</span>
+              <strong>${formatCurrency(simulation.rewardPer100)}</strong>
             </div>
             <div class="metric-pair">
               <span>竞争强度</span>
@@ -590,7 +599,7 @@ function renderMetricCards(simulation) {
   const metrics = [
     { label: "预估每小时奖励", value: formatCurrency(simulation.hourlyReward), subtext: `当前每小时总奖励 ${formatCurrency(simulation.hourlyPool)}` },
     { label: "预估每日奖励", value: formatCurrency(simulation.dailyReward), subtext: "按当前快照线性外推 24 小时" },
-    { label: "每 1000 USDC 收益", value: formatCurrency(simulation.rewardPer1000), subtext: "用于横向比较不同池子的资金效率" },
+    { label: "每 100 USDC 收益", value: formatCurrency(simulation.rewardPer100), subtext: "用于横向比较不同池子的资金效率" },
     { label: "ROI/h", value: formatPercent(simulation.roi), subtext: `竞争强度 ${simulation.competitionLevel} · ${simulation.competitionScore}/100` },
     { label: "用户预估有效分数", value: simulation.userScore.toFixed(1), subtext: "受金额、挂单侧数、报价距离和时长影响" },
     { label: "预估奖励占比", value: formatPercent(simulation.estimatedShare * 100), subtext: "用户得分 / (市场当前总分 + 用户得分)" },
@@ -660,7 +669,7 @@ function renderDetail() {
 
   renderMetricCards(simulation);
 
-  const amountCurve = [250, 500, 1000, 2500, 5000].map((amount) => ({
+  const amountCurve = [50, 100, 200, 500, 1000].map((amount) => ({
     label: `${amount}`,
     value: computeSimulation(selected, { ...state.detail, amount }).hourlyReward,
   }));
