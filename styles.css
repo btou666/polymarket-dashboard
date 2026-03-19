@@ -325,7 +325,7 @@ select {
 .summary-card strong {
   display: block;
   margin-top: 8px;
-  font-size: var(--fs-2xl);
+  font-size: clamp(1.18rem, 1.55vw, 1.36rem);
   line-height: 1.15;
   font-family: var(--font-ui);
   font-weight: 700;
@@ -358,7 +358,7 @@ select {
 
 .panel-header h2 {
   margin: 6px 0 0;
-  font-size: clamp(1.5rem, 2.6vw, 2rem);
+  font-size: clamp(1.36rem, 2.2vw, 1.72rem);
   line-height: 1.2;
 }
 
@@ -408,7 +408,7 @@ select {
 .market-name {
   margin: 0;
   max-width: 24ch;
-  font-size: clamp(1.55rem, 2vw, 1.9rem);
+  font-size: clamp(1.04rem, 1.28vw, 1.22rem);
   line-height: 1.2;
   letter-spacing: -0.015em;
   font-family: var(--font-ui);
@@ -461,11 +461,11 @@ select {
 }
 
 .market-topline .metric-pair strong {
-  font-size: clamp(1.35rem, 1.7vw, 1.6rem);
+  font-size: clamp(0.96rem, 1.05vw, 1.08rem);
 }
 
 .market-bottomline .metric-pair strong {
-  font-size: clamp(1.2rem, 1.35vw, 1.35rem);
+  font-size: clamp(0.88rem, 0.92vw, 0.94rem);
 }
 
 .market-bottomline {
@@ -553,7 +553,7 @@ select {
 
 .detail-card-head h3 {
   margin: 8px 0 6px;
-  font-size: clamp(1.4rem, 2.4vw, 1.8rem);
+  font-size: clamp(1rem, 1.35vw, 1.16rem);
   line-height: 1.25;
 }
 
@@ -604,7 +604,7 @@ select {
 
 .metric-value {
   margin: 8px 0 0;
-  font-size: var(--fs-2xl);
+  font-size: clamp(1.1rem, 1.35vw, 1.22rem);
   line-height: 1.15;
 }
 
