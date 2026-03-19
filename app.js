@@ -239,6 +239,47 @@ function inferCategoryFromRewardsRow(row) {
   return "Rewards";
 }
 
+function inferEndDateFallback(row) {
+  const candidates = [row.end_date, row.endDate, row.market_slug, row.event_slug, row.question];
+
+  for (const value of candidates) {
+    if (typeof value !== "string") continue;
+    const isoMatch = value.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+    if (isoMatch) {
+      return `${isoMatch[1]}T23:59:59Z`;
+    }
+  }
+
+  const text = typeof row.question === "string" ? row.question : "";
+  const m = text.match(
+    /\b(?:on\s+)?(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:,\s*(\d{4}))?/i,
+  );
+  if (!m) return null;
+
+  const monthNames = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+  ];
+  const month = monthNames.indexOf(m[1].toLowerCase());
+  if (month < 0) return null;
+  const day = Number(m[2]);
+  const year = Number(m[3]) || new Date().getUTCFullYear();
+  if (!Number.isFinite(day) || day < 1 || day > 31) return null;
+
+  const ts = Date.UTC(year, month, day, 23, 59, 59);
+  return Number.isFinite(ts) ? new Date(ts).toISOString() : null;
+}
+
 function toPolymarketUrl(value) {
   if (typeof value !== "string") return null;
   const raw = value.trim();
@@ -289,7 +330,7 @@ function mapRewardsMarket(row) {
   const spreadNow = toNumber(row.spread, 0.05);
   // Empirical denominator tuned for Rewards pools: keep single-side near-book estimates closer to observed fills.
   const marketScore = Math.max(minSize * 1.8 + competitiveness * 1.35 + spreadNow * 72, 70);
-  const endDate = row.end_date || null;
+  const endDate = row.end_date || row.endDate || inferEndDateFallback(row) || null;
   const hoursToSettlement = hoursUntil(endDate);
 
   return {
