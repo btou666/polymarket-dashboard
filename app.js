@@ -329,7 +329,7 @@ async function fetchWithTimeout(url, timeoutMs = 9000) {
 }
 
 async function fetchLiveMarketPayload() {
-  const query = "limit=200";
+  const query = "limit=500";
   const endpoints = [{ url: `/api/live-markets?${query}`, label: "实时 (Rewards池)" }];
 
   let lastError = null;
