@@ -239,6 +239,40 @@ function inferCategoryFromRewardsRow(row) {
   return "Rewards";
 }
 
+function toPolymarketUrl(value) {
+  if (typeof value !== "string") return null;
+  const raw = value.trim();
+  if (!raw) return null;
+
+  try {
+    const url = new URL(raw, "https://polymarket.com");
+    if (url.origin !== "https://polymarket.com") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function inferEventUrlFromRewardsRow(row) {
+  const directCandidates = [row.event_url, row.eventUrl, row.url, row.market_url, row.marketUrl, row.href];
+  for (const candidate of directCandidates) {
+    const normalized = toPolymarketUrl(candidate);
+    if (normalized) return normalized;
+  }
+
+  const eventSlug = typeof row.event_slug === "string" ? row.event_slug.trim() : "";
+  if (eventSlug) {
+    return toPolymarketUrl(`/event/${eventSlug}`);
+  }
+
+  const marketSlug = typeof row.market_slug === "string" ? row.market_slug.trim() : "";
+  if (!marketSlug) return null;
+  if (marketSlug.startsWith("/") || marketSlug.startsWith("http")) {
+    return toPolymarketUrl(marketSlug);
+  }
+  return toPolymarketUrl(`/event/${marketSlug}`);
+}
+
 function mapRewardsMarket(row) {
   const dailyReward = calcDailyRewardFromConfig(row.rewards_config);
   if (dailyReward <= 0) return null;
@@ -273,6 +307,7 @@ function mapRewardsMarket(row) {
     depthDensity,
     twoSidedShare: tokens.length >= 2 ? 64 : 44,
     lastUpdatedMinutes: 1,
+    url: inferEventUrlFromRewardsRow(row),
     endDate,
     hoursToSettlement,
   };
@@ -490,7 +525,13 @@ function renderMarketList(rows) {
         <article class="market-card ${selectedClass}" data-market-id="${market.id}">
           <div class="market-topline">
             <div>
-              <p class="market-name">${market.name}</p>
+              <p class="market-name">
+                ${
+                  market.url
+                    ? `<a class="market-name-link" href="${market.url}" target="_blank" rel="noopener noreferrer">${market.name}</a>`
+                    : market.name
+                }
+              </p>
               <p class="market-meta">
                 ${market.category} · ${market.state} · midpoint ${market.midpoint.toFixed(2)} · min size ${market.minSize} · ${formatSettlementLabel(market.hoursToSettlement)}
               </p>
@@ -535,6 +576,12 @@ function renderMarketList(rows) {
       state.selectedMarketId = card.dataset.marketId;
       state.detail.amount = state.amount;
       renderAll();
+    });
+  });
+
+  document.querySelectorAll(".market-name-link").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.stopPropagation();
     });
   });
 }
