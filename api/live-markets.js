@@ -1,5 +1,6 @@
 const REWARDS_PAGE_URL = "https://polymarket.com/rewards";
 const QUERY_KEY_PATH = "/api/rewards";
+const GAMMA_MARKETS_ENDPOINT = "https://gamma-api.polymarket.com/markets";
 
 function extractNextDataJson(html) {
   const marker = '<script id="__NEXT_DATA__" type="application/json"';
@@ -40,6 +41,45 @@ function extractRewardsPayload(nextData) {
   return payload;
 }
 
+function chunk(array, size) {
+  const out = [];
+  for (let index = 0; index < array.length; index += size) {
+    out.push(array.slice(index, index + size));
+  }
+  return out;
+}
+
+async function fetchGammaDateMap(marketIds) {
+  const dateMap = new Map();
+  const idChunks = chunk(marketIds, 40);
+
+  for (const group of idChunks) {
+    const url = new URL(GAMMA_MARKETS_ENDPOINT);
+    group.forEach((id) => url.searchParams.append("id", String(id)));
+
+    try {
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) continue;
+
+      const rows = await response.json();
+      if (!Array.isArray(rows)) continue;
+
+      rows.forEach((row) => {
+        if (row && row.id) {
+          dateMap.set(String(row.id), row.endDate || null);
+        }
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return dateMap;
+}
+
 module.exports = async function handler(req, res) {
   try {
     const upstreamResponse = await fetch(REWARDS_PAGE_URL, {
@@ -66,14 +106,20 @@ module.exports = async function handler(req, res) {
 
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
     const trimmedRows = payload.data.slice(0, limit);
+    const marketIds = trimmedRows.map((row) => String(row.market_id));
+    const gammaDateMap = await fetchGammaDateMap(marketIds);
+    const mergedRows = trimmedRows.map((row) => ({
+      ...row,
+      end_date: gammaDateMap.get(String(row.market_id)) || null,
+    }));
 
     res.setHeader("Cache-Control", "s-maxage=45, stale-while-revalidate=180");
     res.status(200).json({
-      data: trimmedRows,
+      data: mergedRows,
       next_cursor: payload.next_cursor ?? null,
-      limit: trimmedRows.length,
-      count: payload.count ?? trimmedRows.length,
-      total_count: payload.total_count ?? trimmedRows.length,
+      limit: mergedRows.length,
+      count: payload.count ?? mergedRows.length,
+      total_count: payload.total_count ?? mergedRows.length,
       source: "rewards_page_next_data",
     });
   } catch (error) {

@@ -176,7 +176,7 @@ select {
 .control-bar {
   margin-top: 20px;
   display: grid;
-  grid-template-columns: 1.2fr repeat(4, minmax(0, 1fr));
+  grid-template-columns: 1.2fr repeat(5, minmax(0, 1fr));
   gap: 14px;
   padding: 18px;
   background: rgba(255, 250, 242, 0.72);

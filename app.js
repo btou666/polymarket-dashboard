@@ -91,6 +91,7 @@ const state = {
   amount: 1000,
   sortBy: "roi",
   search: "",
+  settlementRange: "all",
   filters: new Set(),
   selectedMarketId: fallbackMarkets[0].id,
   markets: fallbackMarkets,
@@ -112,6 +113,7 @@ const elements = {
   globalAmount: document.querySelector("#global-amount"),
   sortBy: document.querySelector("#sort-by"),
   marketSearch: document.querySelector("#market-search"),
+  settlementFilter: document.querySelector("#settlement-filter"),
   chips: document.querySelectorAll(".chip"),
   refreshData: document.querySelector("#refresh-data"),
   dataStatus: document.querySelector("#data-status"),
@@ -183,6 +185,29 @@ function minutesSince(isoDate) {
   return Math.max(0, Math.round((Date.now() - ts) / 60000));
 }
 
+function hoursUntil(isoDate) {
+  const ts = Date.parse(isoDate || "");
+  if (!Number.isFinite(ts)) return null;
+  return (ts - Date.now()) / 3600000;
+}
+
+function matchesSettlementRange(hoursToSettlement, settlementRange) {
+  if (settlementRange === "all") return true;
+  if (hoursToSettlement === null) return false;
+  if (settlementRange === "lt1d") return hoursToSettlement >= 0 && hoursToSettlement < 24;
+  if (settlementRange === "d1to3") return hoursToSettlement >= 24 && hoursToSettlement <= 72;
+  if (settlementRange === "gt3d") return hoursToSettlement > 72;
+  return true;
+}
+
+function formatSettlementLabel(hoursToSettlement) {
+  if (hoursToSettlement === null) return "结算时间未知";
+  if (hoursToSettlement < 0) return "已过结算时间";
+  if (hoursToSettlement < 24) return "结算时间：1天内";
+  if (hoursToSettlement <= 72) return "结算时间：1-3天";
+  return "结算时间：>3天";
+}
+
 function freshnessLabel(minutes) {
   if (minutes <= 2) return "数据新鲜";
   if (minutes <= 5) return "数据一般";
@@ -227,6 +252,8 @@ function mapRewardsMarket(row) {
   const competitiveness = clamp(toNumber(row.market_competitiveness, 0.5) * 100, 5, 99);
   const depthDensity = clamp((Math.log10(volume24h + 10) - 0.7) * 40, 8, 96);
   const marketScore = Math.max(volume24h * 28, 1200);
+  const endDate = row.end_date || null;
+  const hoursToSettlement = hoursUntil(endDate);
 
   return {
     id: String(row.market_id),
@@ -243,6 +270,8 @@ function mapRewardsMarket(row) {
     depthDensity,
     twoSidedShare: tokens.length >= 2 ? 64 : 44,
     lastUpdatedMinutes: 1,
+    endDate,
+    hoursToSettlement,
   };
 }
 
@@ -262,11 +291,8 @@ async function fetchWithTimeout(url, timeoutMs = 9000) {
 }
 
 async function fetchLiveMarketPayload() {
-  const query = "interval=current&market_type=market&sort=DESC&tag=&category=all&cursor=MA==&limit=100&is_terminal=true";
-  const endpoints = [
-    { url: `/api/live-markets?${query}`, label: "实时 (Vercel代理)" },
-    { url: `https://polymarket.com/api/rewards?${query}`, label: "实时 (直连)" },
-  ];
+  const query = "limit=200";
+  const endpoints = [{ url: `/api/live-markets?${query}`, label: "实时 (Rewards池)" }];
 
   let lastError = null;
   for (const endpoint of endpoints) {
@@ -382,13 +408,14 @@ function filterAndSortRows(rows) {
     const name = (market.name || "").toLowerCase();
     const category = (market.category || "").toLowerCase();
     const matchesSearch = !search || name.includes(search) || category.includes(search);
+    const matchesSettlement = matchesSettlementRange(market.hoursToSettlement, state.settlementRange);
     const matchesFilters = [...state.filters].every((filter) => {
       if (filter === "highReward") return tags.some((tag) => tag.label === "高奖励");
       if (filter === "lowCompetition") return simulation.competitionScore <= 33;
       if (filter === "dualFriendly") return tags.some((tag) => tag.label === "适合双边");
       return true;
     });
-    return matchesSearch && matchesFilters;
+    return matchesSearch && matchesSettlement && matchesFilters;
   });
 
   filtered.sort((a, b) => {
@@ -473,7 +500,7 @@ function renderMarketList(rows) {
             <div>
               <p class="market-name">${market.name}</p>
               <p class="market-meta">
-                ${market.category} · ${market.state} · midpoint ${market.midpoint.toFixed(2)} · min size ${market.minSize}
+                ${market.category} · ${market.state} · midpoint ${market.midpoint.toFixed(2)} · min size ${market.minSize} · ${formatSettlementLabel(market.hoursToSettlement)}
               </p>
             </div>
             <div class="metric-pair">
@@ -643,8 +670,7 @@ async function loadLiveMarkets() {
     const mapped = payload
       .map(mapRewardsMarket)
       .filter(Boolean)
-      .sort((a, b) => b.dailyReward - a.dailyReward || b.bookDepth - a.bookDepth)
-      .slice(0, 80);
+      .sort((a, b) => b.dailyReward - a.dailyReward || b.bookDepth - a.bookDepth);
 
     if (!mapped.length) {
       throw new Error("实时接口返回为空");
@@ -685,6 +711,11 @@ elements.sortBy.addEventListener("change", (event) => {
 
 elements.marketSearch.addEventListener("input", (event) => {
   state.search = event.target.value;
+  renderAll();
+});
+
+elements.settlementFilter.addEventListener("change", (event) => {
+  state.settlementRange = event.target.value;
   renderAll();
 });
 
