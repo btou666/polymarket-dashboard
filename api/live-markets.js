@@ -7,6 +7,7 @@ const MAX_LIMIT = 500;
 const REWARDS_PAGE_SIZE = 100;
 const GAMMA_PAGE_SIZE = 500;
 const GAMMA_MAX_SCAN = 5000;
+const GAMMA_CONDITION_SCAN_MAX = 6000;
 
 function extractNextDataJson(html) {
   const marker = '<script id="__NEXT_DATA__" type="application/json"';
@@ -167,6 +168,7 @@ function mapGammaToRewardsRow(row) {
 
   return {
     market_id: row?.id,
+    condition_id: row?.conditionId || null,
     question: row?.question || "",
     market_slug: row?.slug || "",
     event_slug: row?.events?.[0]?.slug || row?.slug || "",
@@ -221,8 +223,17 @@ async function fetchGammaRewardsFallbackRows(limit, seenMarketIds) {
   return rows;
 }
 
-async function fetchGammaDateMap(marketIds) {
-  const dateMap = new Map();
+async function fetchGammaDateMaps(rewardRows) {
+  const dateMapByMarketId = new Map();
+  const dateMapByConditionId = new Map();
+  const marketIds = (Array.isArray(rewardRows) ? rewardRows : [])
+    .map((row) => String(row?.market_id ?? ""))
+    .filter(Boolean);
+  const unresolvedConditionIds = new Set(
+    (Array.isArray(rewardRows) ? rewardRows : [])
+      .map((row) => String(row?.condition_id || "").toLowerCase())
+      .filter(Boolean),
+  );
   const idChunks = chunk(marketIds, 40);
 
   for (const group of idChunks) {
@@ -240,8 +251,14 @@ async function fetchGammaDateMap(marketIds) {
       if (!Array.isArray(rows)) continue;
 
       rows.forEach((row) => {
-        if (row && row.id) {
-          dateMap.set(String(row.id), row.endDate || null);
+        if (!row) return;
+        if (row.id) {
+          dateMapByMarketId.set(String(row.id), row.endDate || null);
+        }
+        const conditionId = String(row.conditionId || "").toLowerCase();
+        if (conditionId) {
+          dateMapByConditionId.set(conditionId, row.endDate || null);
+          unresolvedConditionIds.delete(conditionId);
         }
       });
     } catch {
@@ -249,7 +266,43 @@ async function fetchGammaDateMap(marketIds) {
     }
   }
 
-  return dateMap;
+  // Rewards payload uses condition_id widely; scan active gamma pages to backfill missing dates by conditionId.
+  if (unresolvedConditionIds.size > 0) {
+    let offset = 0;
+    while (offset < GAMMA_CONDITION_SCAN_MAX && unresolvedConditionIds.size > 0) {
+      const url = new URL(GAMMA_MARKETS_ENDPOINT);
+      url.searchParams.set("active", "true");
+      url.searchParams.set("closed", "false");
+      url.searchParams.set("limit", String(GAMMA_PAGE_SIZE));
+      url.searchParams.set("offset", String(offset));
+
+      try {
+        const response = await fetch(url.toString(), {
+          method: "GET",
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) break;
+
+        const rows = await response.json();
+        if (!Array.isArray(rows) || !rows.length) break;
+
+        rows.forEach((row) => {
+          if (!row) return;
+          const conditionId = String(row.conditionId || "").toLowerCase();
+          if (!conditionId || !unresolvedConditionIds.has(conditionId)) return;
+          dateMapByConditionId.set(conditionId, row.endDate || null);
+          unresolvedConditionIds.delete(conditionId);
+        });
+
+        if (rows.length < GAMMA_PAGE_SIZE) break;
+        offset += rows.length;
+      } catch {
+        break;
+      }
+    }
+  }
+
+  return { dateMapByMarketId, dateMapByConditionId };
 }
 
 module.exports = async function handler(req, res) {
@@ -293,11 +346,14 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    const marketIds = rewardRows.map((row) => String(row.market_id));
-    const gammaDateMap = await fetchGammaDateMap(marketIds);
+    const { dateMapByMarketId, dateMapByConditionId } = await fetchGammaDateMaps(rewardRows);
     const mergedRows = rewardRows.map((row) => ({
       ...row,
-      end_date: gammaDateMap.get(String(row.market_id)) || null,
+      end_date:
+        row.end_date ||
+        dateMapByMarketId.get(String(row.market_id)) ||
+        dateMapByConditionId.get(String(row.condition_id || "").toLowerCase()) ||
+        null,
     }));
 
     res.setHeader("Cache-Control", "s-maxage=45, stale-while-revalidate=180");
