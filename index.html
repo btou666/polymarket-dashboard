@@ -53,7 +53,6 @@
           <div class="filter-chips">
             <button class="chip" data-filter="highReward" type="button">高奖励</button>
             <button class="chip" data-filter="lowCompetition" type="button">低竞争</button>
-            <button class="chip" data-filter="dualFriendly" type="button">适合双边</button>
           </div>
         </div>
 
@@ -73,7 +72,7 @@
               <p class="panel-label">页面一</p>
               <h2>奖励池总览</h2>
             </div>
-            <p class="panel-note">总览默认按“双边 + 中档报价距离 + 4h”进行快照式估算。</p>
+            <p class="panel-note">总览默认按“单边 + 中档报价距离 + 4h”进行快照式估算。</p>
           </div>
           <div class="market-list" id="market-list"></div>
         </section>
@@ -84,7 +83,7 @@
               <p class="panel-label">页面二</p>
               <h2>单池基础模拟</h2>
             </div>
-            <p class="panel-note">选中左侧池子后，可对比单边 / 双边和报价距离。</p>
+            <p class="panel-note">选中左侧池子后，可优先按单边策略对比不同报价距离。</p>
           </div>
 
           <div class="empty-state" id="detail-empty">
@@ -110,16 +109,16 @@
                 <label>
                   <span>挂单方式</span>
                   <select id="detail-strategy">
+                    <option value="single" selected>单边</option>
                     <option value="both">双边</option>
-                    <option value="single">单边</option>
                   </select>
                 </label>
                 <label>
                   <span>挂单方向</span>
                   <select id="detail-direction">
-                    <option value="both">双边</option>
-                    <option value="buy">买</option>
+                    <option value="buy" selected>买</option>
                     <option value="sell">卖</option>
+                    <option value="both">双边</option>
                   </select>
                 </label>
                 <label>

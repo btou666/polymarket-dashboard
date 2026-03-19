@@ -102,8 +102,8 @@ const state = {
   loadError: "",
   detail: {
     amount: 1000,
-    strategy: "both",
-    direction: "both",
+    strategy: "single",
+    direction: "buy",
     spreadTier: "balanced",
     duration: 4,
   },
@@ -251,7 +251,10 @@ function mapRewardsMarket(row) {
   const volume24h = toNumber(row.volume_24hr, 0);
   const competitiveness = clamp(toNumber(row.market_competitiveness, 0.5) * 100, 5, 99);
   const depthDensity = clamp((Math.log10(volume24h + 10) - 0.7) * 40, 8, 96);
-  const marketScore = Math.max(volume24h * 28, 1200);
+  const minSize = Math.max(toNumber(row.rewards_min_size, 5), 5);
+  const spreadNow = toNumber(row.spread, 0.05);
+  // Calibrated denominator: rewards pool competition should not scale linearly with 24h volume.
+  const marketScore = Math.max(minSize * 2.4 + competitiveness * 1.8 + spreadNow * 120, 90);
   const endDate = row.end_date || null;
   const hoursToSettlement = hoursUntil(endDate);
 
@@ -262,7 +265,7 @@ function mapRewardsMarket(row) {
     state: "进行中",
     dailyReward,
     maxSpread: toNumber(row.rewards_max_spread, 3.5),
-    minSize: Math.max(toNumber(row.rewards_min_size, 5), 5),
+    minSize,
     midpoint,
     bookDepth: volume24h,
     marketScore,
@@ -335,7 +338,7 @@ function computeSimulation(market, config) {
   const stateFactor = market.state === "即将结算" ? 0.88 : 1;
 
   const userScore =
-    Math.pow(Math.max(amount, 0), 0.94) *
+    Math.pow(Math.max(amount, 0), 0.62) *
     spreadScore *
     strategyFactor *
     directionFactor *
@@ -376,14 +379,6 @@ function buildOverviewRows() {
   return state.markets.map((market) => {
     const baseSimulation = computeSimulation(market, {
       amount: state.amount,
-      strategy: "both",
-      direction: "both",
-      spreadTier: "balanced",
-      duration: 4,
-    });
-
-    const singleSimulation = computeSimulation(market, {
-      amount: state.amount,
       strategy: "single",
       direction: "buy",
       spreadTier: "balanced",
@@ -394,9 +389,6 @@ function buildOverviewRows() {
     if (market.dailyReward >= highRewardThreshold) tags.push({ label: "高奖励", tone: "reward" });
     if (baseSimulation.competitionScore <= 33) tags.push({ label: "低竞争", tone: "safe" });
     if (baseSimulation.competitionScore >= 67) tags.push({ label: "竞争激烈", tone: "alert" });
-    if (baseSimulation.hourlyReward > singleSimulation.hourlyReward * 1.18) {
-      tags.push({ label: "适合双边", tone: "info" });
-    }
 
     return { market, simulation: baseSimulation, tags };
   });
@@ -412,7 +404,6 @@ function filterAndSortRows(rows) {
     const matchesFilters = [...state.filters].every((filter) => {
       if (filter === "highReward") return tags.some((tag) => tag.label === "高奖励");
       if (filter === "lowCompetition") return simulation.competitionScore <= 33;
-      if (filter === "dualFriendly") return tags.some((tag) => tag.label === "适合双边");
       return true;
     });
     return matchesSearch && matchesSettlement && matchesFilters;
@@ -455,7 +446,8 @@ function renderSummary(rows) {
   const bestByRoi = rows[0];
   const bestByReward = [...rows].sort((a, b) => b.simulation.hourlyReward - a.simulation.hourlyReward)[0];
   const averageRoi = rows.reduce((sum, row) => sum + row.simulation.roi, 0) / rows.length;
-  const freshestCount = rows.filter((row) => row.market.lastUpdatedMinutes <= 2).length;
+  const filteredCount = rows.length;
+  const totalCount = state.markets.length;
 
   elements.summaryStrip.innerHTML = `
     <article class="summary-card">
@@ -471,8 +463,8 @@ function renderSummary(rows) {
       <strong>${formatPercent(averageRoi)}</strong>
     </article>
     <article class="summary-card">
-      <p>${state.dataSource === "live" ? "实时池子数" : "兜底池子数"}</p>
-      <strong>${freshestCount}/${rows.length}</strong>
+      <p>${state.dataSource === "live" ? "展示池子数（筛选后）" : "兜底池子数（筛选后）"}</p>
+      <strong>${filteredCount}/${totalCount}</strong>
     </article>
   `;
 }
@@ -553,7 +545,7 @@ function renderMetricCards(simulation) {
     { label: "预估每日奖励", value: formatCurrency(simulation.dailyReward), subtext: "按当前快照线性外推 24 小时" },
     { label: "每 1000 USDC 收益", value: formatCurrency(simulation.rewardPer1000), subtext: "用于横向比较不同池子的资金效率" },
     { label: "ROI/h", value: formatPercent(simulation.roi), subtext: `竞争强度 ${simulation.competitionLevel} · ${simulation.competitionScore}/100` },
-    { label: "用户预估有效分数", value: simulation.userScore.toFixed(1), subtext: "受金额、双边性、报价距离和时长影响" },
+    { label: "用户预估有效分数", value: simulation.userScore.toFixed(1), subtext: "受金额、挂单侧数、报价距离和时长影响" },
     { label: "预估奖励占比", value: formatPercent(simulation.estimatedShare * 100), subtext: "用户得分 / (市场当前总分 + 用户得分)" },
   ];
 
@@ -635,8 +627,8 @@ function renderDetail() {
 
   elements.strategySummary.textContent =
     state.detail.strategy === "both"
-      ? "双边模式更容易拿到更高有效分数，适合资金均分到两侧的做市策略。"
-      : "单边模式更适合方向明确、想减少两侧资金占用的场景，但预估奖励通常会更低。";
+      ? "双边通常会拿到更高有效分数，但需要两侧同时挂单并分摊资金。"
+      : "单边模式更贴近当前默认策略，适合方向明确、希望资金更集中的挂单方式。";
 
   const spreadTier = getSpreadTierById(state.detail.spreadTier);
   const minSizeWarning =
@@ -773,6 +765,6 @@ elements.detailDuration.addEventListener("change", (event) => {
   renderDetail();
 });
 
-elements.detailDirection.disabled = true;
+elements.detailDirection.disabled = state.detail.strategy === "both";
 renderAll();
 loadLiveMarkets();

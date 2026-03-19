@@ -241,7 +241,7 @@ select {
 }
 
 .chip {
-  border: 1px solid rgba(13, 124, 102, 0.18);
+  border: 1px solid rgba(42, 60, 78, 0.16);
   background: rgba(255, 255, 255, 0.82);
   color: var(--text);
   border-radius: 999px;
@@ -256,8 +256,12 @@ select {
 .chip:hover,
 .chip.active {
   transform: translateY(-1px);
-  background: var(--accent-soft);
-  border-color: rgba(13, 124, 102, 0.42);
+  border-color: rgba(13, 124, 102, 0.56);
+}
+
+.chip.active {
+  background: rgba(13, 124, 102, 0.18);
+  color: #0a5e4f;
 }
 
 .data-group {
