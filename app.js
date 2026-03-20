@@ -231,6 +231,37 @@ function calcDailyRewardFromConfig(rewardsConfig) {
   return rewards.reduce((sum, reward) => sum + toNumber(reward.total_rewards), 0);
 }
 
+function calcRewardBreakdownFromConfig(rewardsConfig) {
+  const rewards = Array.isArray(rewardsConfig) ? rewardsConfig : [];
+  const hasOfficialMarker = rewards.some((reward) => toNumber(reward.id, -1) === 0);
+  let officialDailyReward = 0;
+  let userAddedDailyReward = 0;
+
+  rewards.forEach((reward) => {
+    const daily = toNumber(reward.rate_per_day, 0) || toNumber(reward.total_rewards, 0);
+    if (daily <= 0) return;
+
+    if (!hasOfficialMarker) {
+      officialDailyReward += daily;
+      return;
+    }
+
+    if (toNumber(reward.id, -1) === 0) {
+      officialDailyReward += daily;
+    } else {
+      userAddedDailyReward += daily;
+    }
+  });
+
+  const totalDailyReward = officialDailyReward + userAddedDailyReward;
+  return {
+    officialDailyReward,
+    userAddedDailyReward,
+    totalDailyReward,
+    hasUserAddedReward: userAddedDailyReward > 0,
+  };
+}
+
 function inferCategoryFromRewardsRow(row) {
   const slug = typeof row.event_slug === "string" ? row.event_slug : "";
   if (slug) {
@@ -315,7 +346,8 @@ function inferEventUrlFromRewardsRow(row) {
 }
 
 function mapRewardsMarket(row) {
-  const dailyReward = calcDailyRewardFromConfig(row.rewards_config);
+  const rewardBreakdown = calcRewardBreakdownFromConfig(row.rewards_config);
+  const dailyReward = rewardBreakdown.totalDailyReward || calcDailyRewardFromConfig(row.rewards_config);
   if (dailyReward <= 0) return null;
 
   const tokens = Array.isArray(row.tokens) ? row.tokens : [];
@@ -339,6 +371,9 @@ function mapRewardsMarket(row) {
     category: inferCategoryFromRewardsRow(row),
     state: "进行中",
     dailyReward,
+    officialDailyReward: rewardBreakdown.officialDailyReward || dailyReward,
+    userAddedDailyReward: rewardBreakdown.userAddedDailyReward,
+    hasUserAddedReward: rewardBreakdown.hasUserAddedReward,
     maxSpread: toNumber(row.rewards_max_spread, 3.5),
     minSize,
     midpoint,
@@ -405,6 +440,8 @@ function computeSimulation(market, config) {
   const amount = Number(config.amount);
   const spreadTier = getSpreadTierById(config.spreadTier);
   const hourlyPool = market.dailyReward / 24;
+  const officialHourlyPool = toNumber(market.officialDailyReward, market.dailyReward) / 24;
+  const userAddedHourlyPool = toNumber(market.userAddedDailyReward, 0) / 24;
   const sideAllocation = config.strategy === "both" ? amount / 2 : amount;
   const minSizePenalty = sideAllocation >= market.minSize ? 1 : 0.25;
   const spreadScore = Math.pow(Math.max(1 - spreadTier.ratio * 0.78, 0.08), 1.25);
@@ -433,6 +470,8 @@ function computeSimulation(market, config) {
 
   const estimatedShare = userScore / (market.marketScore + userScore);
   const hourlyReward = hourlyPool * estimatedShare;
+  const officialHourlyReward = officialHourlyPool * estimatedShare;
+  const userAddedHourlyReward = userAddedHourlyPool * estimatedShare;
   const dailyReward = hourlyReward * 24;
   const rewardPer100 = amount > 0 ? (hourlyReward / amount) * 100 : 0;
   const roi = amount > 0 ? (hourlyReward / amount) * 100 : 0;
@@ -441,9 +480,13 @@ function computeSimulation(market, config) {
   return {
     amount,
     hourlyPool,
+    officialHourlyPool,
+    userAddedHourlyPool,
     userScore,
     estimatedShare,
     hourlyReward,
+    officialHourlyReward,
+    userAddedHourlyReward,
     dailyReward,
     rewardPer100,
     roi,
@@ -474,6 +517,7 @@ function buildOverviewRows() {
     if (market.dailyReward >= highRewardThreshold) tags.push({ label: "高奖励", tone: "reward" });
     if (baseSimulation.competitionScore <= 33) tags.push({ label: "低竞争", tone: "safe" });
     if (baseSimulation.competitionScore >= 67) tags.push({ label: "竞争激烈", tone: "alert" });
+    if (market.hasUserAddedReward) tags.push({ label: "含用户追加", tone: "info" });
 
     return { market, simulation: baseSimulation, tags };
   });
@@ -599,6 +643,7 @@ function renderMarketList(rows) {
             <div class="metric-pair">
               <span>每小时总池子奖励</span>
               <strong>${formatCurrency(simulation.hourlyPool)}</strong>
+              <small class="metric-sub-line">官方 ${formatCurrency(simulation.officialHourlyPool)} · 用户 ${formatCurrency(simulation.userAddedHourlyPool)}</small>
             </div>
             <div class="metric-pair">
               <span>每 100 USDC</span>
@@ -638,7 +683,11 @@ function renderMarketList(rows) {
 
 function renderMetricCards(simulation) {
   const metrics = [
-    { label: "预估每小时奖励", value: formatCurrency(simulation.hourlyReward), subtext: `当前每小时总奖励 ${formatCurrency(simulation.hourlyPool)}` },
+    {
+      label: "预估每小时奖励",
+      value: formatCurrency(simulation.hourlyReward),
+      subtext: `官方 ${formatCurrency(simulation.officialHourlyReward)} + 用户追加 ${formatCurrency(simulation.userAddedHourlyReward)}`,
+    },
     { label: "预估每日奖励", value: formatCurrency(simulation.dailyReward), subtext: "按当前快照线性外推 24 小时" },
     { label: "每 100 USDC 收益", value: formatCurrency(simulation.rewardPer100), subtext: "用于横向比较不同池子的资金效率" },
     { label: "ROI/h", value: formatPercent(simulation.roi), subtext: `竞争强度 ${simulation.competitionLevel} · ${simulation.competitionScore}/100` },

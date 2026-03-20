@@ -483,6 +483,14 @@ select {
   font-weight: 600;
 }
 
+.metric-sub-line {
+  margin-top: 1px;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  color: var(--muted);
+  font-family: var(--font-ui);
+}
+
 .tag-row {
   margin-top: 14px;
   display: flex;
