@@ -2,12 +2,20 @@ const REWARDS_PAGE_URL = "https://polymarket.com/rewards";
 const REWARDS_API_URL = "https://polymarket.com/api/rewards";
 const QUERY_KEY_PATH = "/api/rewards";
 const GAMMA_MARKETS_ENDPOINT = "https://gamma-api.polymarket.com/markets";
+const POLYGON_RPC_ENDPOINT = process.env.POLYGON_RPC_URL || "https://polygon-bor-rpc.publicnode.com";
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 500;
 const REWARDS_PAGE_SIZE = 100;
 const GAMMA_PAGE_SIZE = 500;
 const GAMMA_MAX_SCAN = 5000;
 const GAMMA_CONDITION_SCAN_MAX = 6000;
+const DISTRIBUTE_REWARD_TOPIC0 = "0x0be934154273ab5bf3a024f88561955bee89ea6d9aac33477620b101ca5704d9";
+const MULTICALL3_CONTRACT = "0xca11bde05977b3631167028862be2a173976ca11";
+const USER_DISTRIBUTE_CONTRACT = "0xf7cd89be08af4d4d6b1522852ced49fc10169f64";
+const OFFICIAL_DISTRIBUTOR_SENDER = "0xc288480574783bd7615170660d71753378159c47";
+const USER_DISTRIBUTOR_SENDER = "0x823c0e04afe04b7aac419f7001e5eaadfb1b33f1";
+const METHOD_AGGREGATE = "0x252dba42";
+const METHOD_DISTRIBUTE_REWARDS = "0x143ba4f3";
 
 function extractNextDataJson(html) {
   const marker = '<script id="__NEXT_DATA__" type="application/json"';
@@ -70,6 +78,128 @@ function safeJsonParseArray(value) {
   } catch {
     return [];
   }
+}
+
+function normalizeHexAddress(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(raw)) return null;
+  return raw;
+}
+
+function parseTxHashes(query) {
+  const raw = query.tx_hashes || query.tx_hash || "";
+  const text = Array.isArray(raw) ? raw.join(",") : String(raw || "");
+  if (!text.trim()) return [];
+  const hashes = text
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => /^0x[0-9a-f]{64}$/.test(item));
+  return [...new Set(hashes)];
+}
+
+async function rpcCall(method, params) {
+  const response = await fetch(POLYGON_RPC_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      method,
+      params,
+      id: 1,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`RPC HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  if (payload.error) {
+    const message = payload.error?.message || JSON.stringify(payload.error);
+    throw new Error(`RPC ${method} failed: ${message}`);
+  }
+  return payload.result || null;
+}
+
+function formatUnits(rawValue, decimals = 6) {
+  const value = BigInt(rawValue);
+  const base = BigInt(10) ** BigInt(decimals);
+  const integer = value / base;
+  const fraction = value % base;
+  if (fraction === 0n) return integer.toString();
+  const fractionText = fraction.toString().padStart(decimals, "0").replace(/0+$/, "");
+  return `${integer}.${fractionText}`;
+}
+
+function decodeAddressFromTopic(topic) {
+  const hex = String(topic || "").toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(hex)) return null;
+  return `0x${hex.slice(26)}`;
+}
+
+function decodeDistributeRewardLog(log) {
+  const topics = Array.isArray(log?.topics) ? log.topics : [];
+  if (!topics.length) return null;
+  if (String(topics[0]).toLowerCase() !== DISTRIBUTE_REWARD_TOPIC0) return null;
+
+  const recipient = decodeAddressFromTopic(topics[1]);
+  const data = String(log?.data || "");
+  if (!recipient || !/^0x[0-9a-fA-F]+$/.test(data)) return null;
+
+  const rawAmount = BigInt(data);
+  return {
+    recipient,
+    amount_raw: rawAmount.toString(),
+    amount_usdc: formatUnits(rawAmount, 6),
+    topic0: DISTRIBUTE_REWARD_TOPIC0,
+  };
+}
+
+function classifyTxSource(tx) {
+  const from = normalizeHexAddress(tx?.from) || "";
+  const to = normalizeHexAddress(tx?.to) || "";
+  const input = String(tx?.input || "").toLowerCase();
+  const method = input.slice(0, 10);
+
+  if (from === OFFICIAL_DISTRIBUTOR_SENDER && to === MULTICALL3_CONTRACT && method === METHOD_AGGREGATE) {
+    return "official";
+  }
+  if (from === USER_DISTRIBUTOR_SENDER && to === USER_DISTRIBUTE_CONTRACT && method === METHOD_DISTRIBUTE_REWARDS) {
+    return "user";
+  }
+  if (to === USER_DISTRIBUTE_CONTRACT && method === METHOD_DISTRIBUTE_REWARDS) {
+    return "user";
+  }
+  return "unknown";
+}
+
+async function decodeRewardDistributionsFromTx(txHash) {
+  const [tx, receipt] = await Promise.all([
+    rpcCall("eth_getTransactionByHash", [txHash]),
+    rpcCall("eth_getTransactionReceipt", [txHash]),
+  ]);
+  if (!tx || !receipt) {
+    return {
+      tx_hash: txHash,
+      found: false,
+      error: "tx_not_found",
+    };
+  }
+
+  const decoded = (Array.isArray(receipt.logs) ? receipt.logs : [])
+    .map(decodeDistributeRewardLog)
+    .filter(Boolean);
+  const totalRaw = decoded.reduce((sum, item) => sum + BigInt(item.amount_raw), 0n);
+
+  return {
+    tx_hash: txHash,
+    found: true,
+    tx_from: normalizeHexAddress(tx.from),
+    tx_to: normalizeHexAddress(tx.to),
+    method_id: String(tx.input || "").slice(0, 10).toLowerCase(),
+    source_type: classifyTxSource(tx),
+    distribute_log_count: decoded.length,
+    total_amount_usdc: formatUnits(totalRaw, 6),
+    payouts: decoded,
+  };
 }
 
 function buildRewardsApiUrl(cursor, limit) {
@@ -311,6 +441,24 @@ async function fetchGammaDateMaps(rewardRows) {
 
 module.exports = async function handler(req, res) {
   try {
+    const query = req?.query || {};
+    const txHashes = parseTxHashes(query);
+
+    // Debug mode: decode reward distribution tx logs by hash.
+    if (txHashes.length > 0) {
+      const results = await Promise.all(txHashes.map((hash) => decodeRewardDistributionsFromTx(hash)));
+      res.setHeader("Cache-Control", "no-store");
+      res.status(200).json({
+        source: "polygon_rpc_tx_decode",
+        rpc_endpoint: POLYGON_RPC_ENDPOINT,
+        topic0: DISTRIBUTE_REWARD_TOPIC0,
+        decimals: 6,
+        count: results.length,
+        results,
+      });
+      return;
+    }
+
     const upstreamResponse = await fetch(REWARDS_PAGE_URL, {
       method: "GET",
       headers: {
@@ -333,7 +481,7 @@ module.exports = async function handler(req, res) {
     const nextData = JSON.parse(jsonText);
     const payload = extractRewardsPayload(nextData);
 
-    const limit = Math.min(Math.max(Number(req.query.limit) || DEFAULT_LIMIT, 1), MAX_LIMIT);
+    const limit = Math.min(Math.max(Number(query.limit) || DEFAULT_LIMIT, 1), MAX_LIMIT);
     const paged = await collectRewardsRows(payload, limit);
     let rewardRows = paged.rows;
     let source = "rewards_page_next_data_with_cursor_pagination";
