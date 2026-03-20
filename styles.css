@@ -175,6 +175,9 @@ select {
 
 .control-bar {
   margin-top: 8px;
+  position: sticky;
+  top: 10px;
+  z-index: 80;
   display: grid;
   grid-template-columns: 1.2fr repeat(5, minmax(0, 1fr));
   gap: 14px;
