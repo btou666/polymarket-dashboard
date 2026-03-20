@@ -231,7 +231,7 @@ function calcDailyRewardFromConfig(rewardsConfig) {
   return rewards.reduce((sum, reward) => sum + toNumber(reward.total_rewards), 0);
 }
 
-function calcRewardBreakdownFromConfig(rewardsConfig) {
+function calcRewardBreakdownFromConfig(rewardsConfig, makerAddress) {
   const rewards = Array.isArray(rewardsConfig) ? rewardsConfig : [];
   const normalized = rewards
     .map((reward) => ({
@@ -241,6 +241,9 @@ function calcRewardBreakdownFromConfig(rewardsConfig) {
     .filter((reward) => reward.daily > 0);
   const hasOfficialMarker = normalized.some((reward) => reward.id === 0);
   const hasNonOfficialMarker = normalized.some((reward) => reward.id > 0);
+  const maker = String(makerAddress || "").toLowerCase();
+  const hasMakerAddress =
+    /^0x[0-9a-f]{40}$/.test(maker) && maker !== "0x0000000000000000000000000000000000000000";
   let officialDailyReward = 0;
   let userAddedDailyReward = 0;
 
@@ -260,7 +263,15 @@ function calcRewardBreakdownFromConfig(rewardsConfig) {
   });
 
   const totalDailyReward = officialDailyReward + userAddedDailyReward;
-  const splitStatus = hasOfficialMarker ? "labeled" : hasNonOfficialMarker ? "unlabeled" : "labeled";
+  let splitStatus = "labeled";
+  if (hasOfficialMarker && hasNonOfficialMarker) {
+    splitStatus = "labeled";
+  } else if (hasOfficialMarker && !hasNonOfficialMarker) {
+    splitStatus = hasMakerAddress ? "official_only" : "user_hidden";
+  } else if (!hasOfficialMarker && hasNonOfficialMarker) {
+    splitStatus = "unlabeled";
+  }
+
   return {
     officialDailyReward,
     userAddedDailyReward,
@@ -354,7 +365,7 @@ function inferEventUrlFromRewardsRow(row) {
 }
 
 function mapRewardsMarket(row) {
-  const rewardBreakdown = calcRewardBreakdownFromConfig(row.rewards_config);
+  const rewardBreakdown = calcRewardBreakdownFromConfig(row.rewards_config, row.maker_address);
   const dailyReward = rewardBreakdown.totalDailyReward || calcDailyRewardFromConfig(row.rewards_config);
   if (dailyReward <= 0) return null;
 
@@ -624,10 +635,12 @@ function renderMarketList(rows) {
   elements.marketList.innerHTML = rows
     .map(({ market, simulation, tags }) => {
       const selectedClass = market.id === state.selectedMarketId ? "selected" : "";
-      const poolBreakdownText =
-        market.rewardSplitStatus === "unlabeled"
-          ? `来源未标注，仅显示总额 ${formatCurrency(simulation.hourlyPool)}`
-          : `官方 ${formatCurrency(simulation.officialHourlyPool)} · 用户 ${formatCurrency(simulation.userAddedHourlyPool)}`;
+      let poolBreakdownText = `官方 ${formatCurrency(simulation.officialHourlyPool)} · 用户 ${formatCurrency(simulation.userAddedHourlyPool)}`;
+      if (market.rewardSplitStatus === "user_hidden") {
+        poolBreakdownText = `官方 ${formatCurrency(simulation.officialHourlyPool)} · 用户奖励未披露`;
+      } else if (market.rewardSplitStatus === "unlabeled") {
+        poolBreakdownText = `来源未标注，仅显示总额 ${formatCurrency(simulation.hourlyPool)}`;
+      }
       return `
         <article class="market-card ${selectedClass}" data-market-id="${market.id}">
           <div class="market-topline">
@@ -695,10 +708,12 @@ function renderMarketList(rows) {
 }
 
 function renderMetricCards(simulation, market) {
-  const rewardSplitSubtext =
-    market?.rewardSplitStatus === "unlabeled"
-      ? `来源未标注，当前仅展示总奖励 ${formatCurrency(simulation.hourlyPool)}`
-      : `官方 ${formatCurrency(simulation.officialHourlyReward)} + 用户追加 ${formatCurrency(simulation.userAddedHourlyReward)}`;
+  let rewardSplitSubtext = `官方 ${formatCurrency(simulation.officialHourlyReward)} + 用户追加 ${formatCurrency(simulation.userAddedHourlyReward)}`;
+  if (market?.rewardSplitStatus === "user_hidden") {
+    rewardSplitSubtext = `官方 ${formatCurrency(simulation.officialHourlyReward)} + 用户奖励未披露`;
+  } else if (market?.rewardSplitStatus === "unlabeled") {
+    rewardSplitSubtext = `来源未标注，当前仅展示总奖励 ${formatCurrency(simulation.hourlyPool)}`;
+  }
   const metrics = [
     {
       label: "预估每小时奖励",
