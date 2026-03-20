@@ -178,7 +178,11 @@ function mapGammaToRewardsRow(row) {
     rewards_min_size: toNumber(row?.rewardsMinSize, 5),
     rewards_max_spread: toNumber(row?.rewardsMaxSpread, 3.5),
     rewards_config: rewards.map((reward) => ({
+      id: toNumber(reward?.id, 0),
+      start_date: reward?.startDate || null,
+      end_date: reward?.endDate || null,
       rate_per_day: toNumber(reward?.rewardsDailyRate, 0),
+      total_rewards: toNumber(reward?.rewardsAmount, 0),
     })),
     tokens,
     end_date: row?.endDate || null,

@@ -233,20 +233,26 @@ function calcDailyRewardFromConfig(rewardsConfig) {
 
 function calcRewardBreakdownFromConfig(rewardsConfig) {
   const rewards = Array.isArray(rewardsConfig) ? rewardsConfig : [];
-  const hasOfficialMarker = rewards.some((reward) => toNumber(reward.id, -1) === 0);
+  const normalized = rewards
+    .map((reward) => ({
+      id: toNumber(reward.id, -1),
+      daily: toNumber(reward.rate_per_day, 0) || toNumber(reward.total_rewards, 0),
+    }))
+    .filter((reward) => reward.daily > 0);
+  const hasOfficialMarker = normalized.some((reward) => reward.id === 0);
+  const hasNonOfficialMarker = normalized.some((reward) => reward.id > 0);
   let officialDailyReward = 0;
   let userAddedDailyReward = 0;
 
-  rewards.forEach((reward) => {
-    const daily = toNumber(reward.rate_per_day, 0) || toNumber(reward.total_rewards, 0);
-    if (daily <= 0) return;
+  normalized.forEach((reward) => {
+    const daily = reward.daily;
 
     if (!hasOfficialMarker) {
       officialDailyReward += daily;
       return;
     }
 
-    if (toNumber(reward.id, -1) === 0) {
+    if (reward.id === 0) {
       officialDailyReward += daily;
     } else {
       userAddedDailyReward += daily;
@@ -254,11 +260,13 @@ function calcRewardBreakdownFromConfig(rewardsConfig) {
   });
 
   const totalDailyReward = officialDailyReward + userAddedDailyReward;
+  const splitStatus = hasOfficialMarker ? "labeled" : hasNonOfficialMarker ? "unlabeled" : "labeled";
   return {
     officialDailyReward,
     userAddedDailyReward,
     totalDailyReward,
     hasUserAddedReward: userAddedDailyReward > 0,
+    splitStatus,
   };
 }
 
@@ -374,6 +382,7 @@ function mapRewardsMarket(row) {
     officialDailyReward: rewardBreakdown.officialDailyReward || dailyReward,
     userAddedDailyReward: rewardBreakdown.userAddedDailyReward,
     hasUserAddedReward: rewardBreakdown.hasUserAddedReward,
+    rewardSplitStatus: rewardBreakdown.splitStatus,
     maxSpread: toNumber(row.rewards_max_spread, 3.5),
     minSize,
     midpoint,
@@ -615,6 +624,10 @@ function renderMarketList(rows) {
   elements.marketList.innerHTML = rows
     .map(({ market, simulation, tags }) => {
       const selectedClass = market.id === state.selectedMarketId ? "selected" : "";
+      const poolBreakdownText =
+        market.rewardSplitStatus === "unlabeled"
+          ? `来源未标注，仅显示总额 ${formatCurrency(simulation.hourlyPool)}`
+          : `官方 ${formatCurrency(simulation.officialHourlyPool)} · 用户 ${formatCurrency(simulation.userAddedHourlyPool)}`;
       return `
         <article class="market-card ${selectedClass}" data-market-id="${market.id}">
           <div class="market-topline">
@@ -643,7 +656,7 @@ function renderMarketList(rows) {
             <div class="metric-pair">
               <span>每小时总池子奖励</span>
               <strong>${formatCurrency(simulation.hourlyPool)}</strong>
-              <small class="metric-sub-line">官方 ${formatCurrency(simulation.officialHourlyPool)} · 用户 ${formatCurrency(simulation.userAddedHourlyPool)}</small>
+              <small class="metric-sub-line">${poolBreakdownText}</small>
             </div>
             <div class="metric-pair">
               <span>每 100 USDC</span>
@@ -681,12 +694,16 @@ function renderMarketList(rows) {
   });
 }
 
-function renderMetricCards(simulation) {
+function renderMetricCards(simulation, market) {
+  const rewardSplitSubtext =
+    market?.rewardSplitStatus === "unlabeled"
+      ? `来源未标注，当前仅展示总奖励 ${formatCurrency(simulation.hourlyPool)}`
+      : `官方 ${formatCurrency(simulation.officialHourlyReward)} + 用户追加 ${formatCurrency(simulation.userAddedHourlyReward)}`;
   const metrics = [
     {
       label: "预估每小时奖励",
       value: formatCurrency(simulation.hourlyReward),
-      subtext: `官方 ${formatCurrency(simulation.officialHourlyReward)} + 用户追加 ${formatCurrency(simulation.userAddedHourlyReward)}`,
+      subtext: rewardSplitSubtext,
     },
     { label: "预估每日奖励", value: formatCurrency(simulation.dailyReward), subtext: "按当前快照线性外推 24 小时" },
     { label: "每 100 USDC 收益", value: formatCurrency(simulation.rewardPer100), subtext: "用于横向比较不同池子的资金效率" },
@@ -757,7 +774,7 @@ function renderDetail() {
   elements.detailSubtitle.textContent = `max spread ${selected.maxSpread.toFixed(1)} · min size ${selected.minSize} · midpoint ${selected.midpoint.toFixed(2)}`;
   elements.detailFreshness.textContent = `${freshnessLabel(selected.lastUpdatedMinutes)} · ${selected.lastUpdatedMinutes} 分钟前更新`;
 
-  renderMetricCards(simulation);
+  renderMetricCards(simulation, selected);
 
   const amountCurve = [50, 100, 200, 500, 1000].map((amount) => ({
     label: `${amount}`,
