@@ -637,7 +637,7 @@ function renderMarketList(rows) {
       const selectedClass = market.id === state.selectedMarketId ? "selected" : "";
       let poolBreakdownText = `官方 ${formatCurrency(simulation.officialHourlyPool)} · 用户 ${formatCurrency(simulation.userAddedHourlyPool)}`;
       if (market.rewardSplitStatus === "user_hidden") {
-        poolBreakdownText = `官方 ${formatCurrency(simulation.officialHourlyPool)} · 用户奖励未披露`;
+        poolBreakdownText = `官方 ${formatCurrency(simulation.officialHourlyPool)} · 用户 0（当前快照未观测到）`;
       } else if (market.rewardSplitStatus === "unlabeled") {
         poolBreakdownText = `来源未标注，仅显示总额 ${formatCurrency(simulation.hourlyPool)}`;
       }
@@ -710,7 +710,7 @@ function renderMarketList(rows) {
 function renderMetricCards(simulation, market) {
   let rewardSplitSubtext = `官方 ${formatCurrency(simulation.officialHourlyReward)} + 用户追加 ${formatCurrency(simulation.userAddedHourlyReward)}`;
   if (market?.rewardSplitStatus === "user_hidden") {
-    rewardSplitSubtext = `官方 ${formatCurrency(simulation.officialHourlyReward)} + 用户奖励未披露`;
+    rewardSplitSubtext = `官方 ${formatCurrency(simulation.officialHourlyReward)} + 用户 0（当前快照未观测到）`;
   } else if (market?.rewardSplitStatus === "unlabeled") {
     rewardSplitSubtext = `来源未标注，当前仅展示总奖励 ${formatCurrency(simulation.hourlyPool)}`;
   }
